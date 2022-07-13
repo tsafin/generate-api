@@ -10,10 +10,25 @@ local fulltext
 
 local backlog = {}
 local verbose = true
+local currfile
+local titles = {}
+local modules = {}
 
 local function report_file(path)
     if verbose and path ~= nil then
         print('processing: ', path)
+    end
+end
+
+local function report_title(title)
+    if verbose and title ~= nil then
+        print('title: ', title)
+    end
+end
+
+local function report_module(name)
+    if verbose and name ~= nil then
+        print('module: ', name)
     end
 end
 
@@ -23,7 +38,7 @@ local function file_open(path)
         return
     end
     basepath = fio.dirname(path)
-    local currfile = fio.open(path, 'O_RDONLY')
+    currfile = fio.open(path, 'O_RDONLY')
     fulltext = currfile ~= nil and currfile:read()
     report_file(path)
 end
@@ -57,19 +72,52 @@ local function report_queue()
     end
 end
 
+local function save_title(s)
+    if s == nil then
+        return
+    end
+    assert(currfile ~= nil)
+    assert(titles[currfile] == nil)
+    titles[currfile] = s
+    report_title(s)
+end
+
+local function save_module(s)
+    if s == nil then
+        return
+    end
+    assert(currfile ~= nil)
+    assert(modules[currfile] == nil)
+    modules[currfile] = s
+    modules[s] = currfile
+    report_module(s)
+end
+
 local pattern = re.compile([[ --lpeg
-    RST             <- (TocTree / SkipLine )*
+    RST             <- (TocTree / ModuleHeader / Module / SkipLine )*
     SkipLine        <- {[^%nl]* %nl}
+    keyword         <- {[a-zA-Z]+}
+    WsIndent        <- %s^+4
+
     TocTree         <- TocTreeHeader SkipHeaders References
     SkipHeaders     <- (WsIndent ':' keyword ':' [^%nl]* %nl)* %nl
-    TocTreeHeader   <- '..' [ ]^+1 { 'toctree' }'::' [^%nl]* %nl
+    TocTreeHeader   <- '..' [ ]^+1 'toctree::' [^%nl]* %nl
     References      <- (WsIndent Reference %nl? / %nl)*
     Reference       <- { [a-zA-Z0-9_/]+ } -> matchr
-    WsIndent        <- %s^+4
-    keyword         <- {[a-zA-Z]+}
+
+    ModuleHeader    <- Divisor Title Divisor
+    Divisor         <- '-'^+4 %nl
+    Title           <- IndentSpace ModuleTitle %nl
+    IndentSpace     <- %s^+4
+    ModuleTitle     <- {[^%nl]+} -> match_title
+
+    Module          <- '..' [ ]^+1 'module::' ModuleName %nl
+    ModuleName      <- {[^%nl]*} -> match_module
 ]], {
     matchr = function(s) enqueue_file(s) end,
-    -- match_skip = function(s) print('...', s) end,
+    match_title = function(s) save_title(s) end,
+    match_module = function(s) save_module(s) end,
+    match_skip = function(s) print('...', s) end,
 })
 
 -- start from root documentation index
