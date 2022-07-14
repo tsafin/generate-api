@@ -11,8 +11,9 @@ local fulltext
 local backlog = {}
 local verbose = true
 local currfile
-local titles = {}
+local currfunction
 local modules = {}
+local module
 
 local function report_file(path)
     if verbose and path ~= nil then
@@ -32,6 +33,38 @@ local function report_module(name)
     end
 end
 
+local function report_function(name, is_alias)
+    if verbose and name ~= nil then
+        print(is_alias and 'alias:' or 'function: ', name)
+    end
+end
+
+local function report_modules()
+    if verbose then
+        print('modules:\n', require'json'.encode(modules))
+    end
+end
+
+local function save_current_module()
+    if module == nil then
+        return
+    end
+    assert(module.name ~= nil)
+    modules[module.name] = module -- FIXME - merge
+end
+
+local function merge_module(name)
+end
+
+local function open_new_module(path)
+    save_current_module()
+    local guessedname = fio.basename(path, '.rst')
+    module = {
+        name = guessedname,
+        file = path
+    }
+end
+
 local function file_open(path)
     if path == nil then
         fulltext = nil
@@ -40,6 +73,7 @@ local function file_open(path)
     basepath = fio.dirname(path)
     currfile = fio.open(path, 'O_RDONLY')
     fulltext = currfile ~= nil and currfile:read()
+    open_new_module(path)
     report_file(path)
 end
 
@@ -76,9 +110,8 @@ local function save_title(s)
     if s == nil then
         return
     end
-    assert(currfile ~= nil)
-    assert(titles[currfile] == nil)
-    titles[currfile] = s
+    assert(module ~= nil)
+    module.title = s
     report_title(s)
 end
 
@@ -87,14 +120,38 @@ local function save_module(s)
         return
     end
     assert(currfile ~= nil)
-    assert(modules[currfile] == nil)
-    modules[currfile] = s
-    modules[s] = currfile
+    assert(module ~= nil)
+    -- modules[currfile] = s
+    -- preload values if already existing
+    module = modules[s] or module
+    module.name = s
     report_module(s)
 end
 
+local function save_function(name, is_alias)
+    assert(name ~= nil)
+    assert(type(name) == 'string')
+    assert(module ~= nil)
+    if module.funcs == nil then
+        module.funcs = {}
+    end
+    if not is_alias then
+        table.insert(module.funcs, name)
+        module.funcs[name] = {}
+        currfunction = name
+    else
+        assert(currfunction ~= nil)
+        if module.funcs[currfunction].aliases == nil then
+            module.funcs[currfunction].aliases = {}
+        end
+        table.insert(module.funcs[currfunction].aliases, name)
+    end
+    report_function(name, is_alias)
+end
+
 local pattern = re.compile([[ --lpeg
-    RST             <- (TocTree / ModuleHeader / Module / SkipLine )*
+    RST             <- (TocTree / ModuleHeader / Module /
+                        FunctionDef / SkipLine )*
     SkipLine        <- {[^%nl]* %nl}
     keyword         <- {[a-zA-Z]+}
     WsIndent        <- %s^+4
@@ -113,10 +170,23 @@ local pattern = re.compile([[ --lpeg
 
     Module          <- '..' [ ]^+1 'module::' ModuleName %nl
     ModuleName      <- {[^%nl]*} -> match_module
+
+    FunctionDef     <- '..' [ ]^+1 'function::' FuncHeader FuncDescription
+                       FuncParams FuncReturn
+    FuncHeader      <- FuncName %nl ([ ]^+12 FuncNameCont %nl)*
+    FuncName        <- [ ]*{[^%nl]*} -> match_funcname1
+    FuncNameCont    <- [ ]*{[^%nl]*} -> match_funcname2
+    FuncDescription <- (WsIndent Description %nl? / %nl)*
+    Description     <- {[^%nl]+}
+    FuncParams      <- (WsIndent ':param' {[^%nl]})*
+    FuncReturn      <- (WsIndent ':return' {[^%nl]} /
+                        WsIndent ':rtype' {[^%nl]})*
 ]], {
     matchr = function(s) enqueue_file(s) end,
     match_title = function(s) save_title(s) end,
     match_module = function(s) save_module(s) end,
+    match_funcname1 = function(s) save_function(s, false) end,
+    match_funcname2 = function(s) save_function(s, true) end,
     match_skip = function(s) print('...', s) end,
 })
 
@@ -133,6 +203,8 @@ while fulltext do
     file_open(next)
     -- stop if we have failed to open any of enqueued files
 end
+save_current_module()
 report_queue()
+report_modules()
 
 os.exit(0)
