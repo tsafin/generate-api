@@ -39,6 +39,15 @@ local function report_function(name, is_alias)
     end
 end
 
+local function report_param_descr(name, text)
+    if verbose and name ~= nil then
+        print('param: ', name)
+    end
+    if verbose and text ~= nil then
+        print('descr: ', text)
+    end
+end
+
 local function report_modules()
     if verbose then
         print('modules:\n', require'json'.encode(modules))
@@ -149,6 +158,22 @@ local function save_function(name, is_alias)
     report_function(name, is_alias)
 end
 
+local function save_paramdescr(name, text)
+    --assert(text ~= nil)
+    --assert(type(text) == 'string')
+    assert(name ~= nil)
+    assert(type(name) == 'string')
+    assert(module ~= nil)
+    assert(module.funcs ~= nil)
+    assert(currfunction ~= nil)
+    if module.funcs[currfunction].params == nil then
+        module.funcs[currfunction].params = {}
+    end
+    table.insert(module.funcs[currfunction].params, {name = name, descr = text})
+
+    report_param_descr(name, text)
+end
+
 local pattern = re.compile([[ --lpeg
     RST             <- (TocTree / ModuleHeader / Module /
                         FunctionDef / SkipLine )*
@@ -177,17 +202,21 @@ local pattern = re.compile([[ --lpeg
     FuncName        <- [ ]*{[^%nl]*} -> match_funcname1
     FuncNameCont    <- [ ]*{[^%nl]*} -> match_funcname2
     FuncDescription <- (WsIndent Description %nl? / %nl)*
-    Description     <- {[^%nl]+}
-    FuncParams      <- (WsIndent ':param' {[^%nl]})*
-    FuncReturn      <- (WsIndent ':return' {[^%nl]} /
-                        WsIndent ':rtype' {[^%nl]})*
+    Description     <- (!(':param' / ':return:' / ':rtype:' / '..') [^%nl]+)
+
+    FuncParams      <- (WsIndent ':param' FuncParamName %nl? / %nl)*
+    FuncParamName   <- ({[^:]+} ':' {[^%nl]*}) -> match_paramdescr
+    FuncReturn      <- (FuncReturnInfo / FuncReturnType / %nl)*
+    FuncReturnInfo  <- (WsIndent ':return:' [ ]* {[^%nl]*} %nl) -> match_skip
+    FuncReturnType  <- (WsIndent ':rtype:' [ ]* {[^%nl]*} %nl) -> match_skip
 ]], {
     matchr = function(s) enqueue_file(s) end,
     match_title = function(s) save_title(s) end,
     match_module = function(s) save_module(s) end,
     match_funcname1 = function(s) save_function(s, false) end,
     match_funcname2 = function(s) save_function(s, true) end,
-    match_skip = function(s) print('...', s) end,
+    match_paramdescr = function(p, d) save_paramdescr(p, d) end,
+    match_skip = function(a, ...) print('...', a, ...) end,
 })
 
 -- start from root documentation index
