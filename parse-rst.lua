@@ -4,7 +4,8 @@
 local re = require 'relabel'
 local fio = require 'fio'
 
-local index_rst = '../tarantool-doc/doc/reference/reference_lua/index.rst'
+--local index_rst = '../tarantool-doc/doc/reference/reference_lua/box_schema_sequence.rst'
+local index_rst = '../tarantool-doc/doc/reference/reference_lua/debug_facilities.rst'
 local basepath
 local fulltext
 
@@ -48,21 +49,12 @@ local function report_param_descr(name, text)
     end
 end
 
-local function report_modules()
-    if verbose then
-        print('modules:\n', require'json'.encode(modules))
-    end
-end
-
 local function save_current_module()
     if module == nil then
         return
     end
     assert(module.name ~= nil)
     modules[module.name] = module -- FIXME - merge
-end
-
-local function merge_module(name)
 end
 
 local function open_new_module(path)
@@ -194,7 +186,7 @@ local pattern = re.compile([[ --lpeg
     ModuleTitle     <- {[^%nl]+} -> match_title
 
     Module          <- '..' [ ]^+1 'module::' ModuleName %nl
-    ModuleName      <- {[^%nl]*} -> match_module
+    ModuleName      <- [ ]*{[^%nl]*} -> match_module
 
     FunctionDef     <- '..' [ ]^+1 'function::' FuncHeader FuncDescription
                        FuncParams FuncReturn
@@ -219,6 +211,85 @@ local pattern = re.compile([[ --lpeg
     match_skip = function(a, ...) print('...', a, ...) end,
 })
 
+
+local outdir = 'out/'
+
+local module_header_tmpl = [[
+--@module %s
+local %s = {}
+
+]]
+
+local module_footer_tmpl = [[
+
+return %s;
+]]
+
+local function_tmpl = [[
+function %s.%s end
+
+]]
+
+local param_tmpl = [[
+-- @param %s
+]]
+
+local module_writer = {}
+
+local function start_gen_module(name, _)
+    if module_writer[name] ~= nil then
+        return
+    end
+    assert(fio.mktree(outdir))
+    local filename = fio.pathjoin(outdir, name .. '.d.lua')
+    print(filename)
+    local fh = fio.open(filename, {'O_CREAT', 'O_RDWR', 'O_TRUNC'},
+                        tonumber('0777', 8))
+    module_writer[name] = fh
+    fh:write(module_header_tmpl:format(name, name))
+end
+
+local function stop_gen_module(name)
+    local fh = module_writer[name]
+    assert(fh ~= nil)
+    fh:write(module_footer_tmpl:format(name))
+    fh:close()
+end
+
+local function gen_functions(name, module)
+    local fh = module_writer[name]
+    assert(fh ~= nil)
+    assert(type(module) == 'table')
+    local funcs = module.funcs
+    for i=1,#funcs do
+        local func=funcs[i]
+        local params = funcs[func].params
+        if params ~= nil then
+            for _, map in pairs(params) do
+                local param_name = map.name
+                fh:write(param_tmpl:format(param_name))
+            end
+        end
+        fh:write(function_tmpl:format(name, func))
+    end
+end
+
+local function generate_modules()
+    --[[if verbose then
+        print('modules:\n', require'json'.encode(modules))
+    end
+    --]]
+    print('modules:\n', require'json'.encode(modules))
+    for name, value in pairs(modules) do
+        start_gen_module(name, value)
+        gen_functions(name, value)
+    end
+
+    for name, _ in pairs(modules) do
+        stop_gen_module(name)
+    end
+end
+
 -- start from root documentation index
 file_open(index_rst)
 
@@ -234,6 +305,6 @@ while fulltext do
 end
 save_current_module()
 report_queue()
-report_modules()
+generate_modules()
 
 os.exit(0)
